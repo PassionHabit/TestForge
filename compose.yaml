@@ -1,0 +1,28 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: testforge
+      POSTGRES_USER: testforge
+      POSTGRES_PASSWORD: testforge-dev
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testforge"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  api:
+    build: .
+    command: ["sh", "-c", "alembic upgrade head && testforge-api"]
+    environment:
+      TESTFORGE_DATABASE_URL: postgresql+psycopg://testforge:testforge-dev@postgres/testforge
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
