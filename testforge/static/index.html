@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TestForge Console</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b1020; --panel:#131a2d; --line:#27324b; --text:#e8edf7; --muted:#94a3b8; --accent:#38bdf8; --danger:#fb7185; }
+    * { box-sizing:border-box; } body { margin:0; font:14px/1.5 ui-sans-serif,system-ui; background:var(--bg); color:var(--text); }
+    header { display:flex; gap:16px; align-items:center; padding:20px 28px; border-bottom:1px solid var(--line); position:sticky; top:0; background:#0b1020ed; backdrop-filter:blur(12px); }
+    h1 { margin:0; font-size:20px; letter-spacing:.04em; } .brand { color:var(--accent); } .grow { flex:1; }
+    main { max-width:1440px; margin:auto; padding:24px; } .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px; margin-bottom:18px; box-shadow:0 10px 30px #0003; }
+    .metric { font-size:32px; font-weight:700; } .muted { color:var(--muted); } h2 { margin:0 0 14px; font-size:16px; }
+    input,select,textarea,button { border:1px solid var(--line); border-radius:7px; background:#0d1425; color:var(--text); padding:9px 11px; }
+    input,select { min-width:160px; } textarea { width:100%; min-height:140px; font-family:ui-monospace,monospace; }
+    button { cursor:pointer; background:#17233a; } button:hover { border-color:var(--accent); } button.primary { color:#00131d; background:var(--accent); font-weight:700; }
+    button.danger { color:var(--danger); } .toolbar,.form-row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+    table { width:100%; border-collapse:collapse; } th,td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--line); vertical-align:top; } th { color:var(--muted); font-weight:500; }
+    code { font:12px ui-monospace,monospace; } .status { padding:3px 7px; border-radius:999px; background:#20304a; font-size:12px; }
+    .error { color:var(--danger); white-space:pre-wrap; } details { margin-top:12px; } a { color:var(--accent); }
+    @media (max-width:900px) { .grid { grid-template-columns:1fr; } .wide { overflow-x:auto; } header { flex-wrap:wrap; } }
+  </style>
+</head>
+<body>
+  <header><h1><span class="brand">TestForge</span> Console</h1><span class="muted">自动化执行控制面</span><span class="grow"></span><input id="apiKey" type="password" placeholder="Control API Key"><button onclick="saveKey()">保存凭据</button><button class="primary" onclick="refreshAll()">刷新</button></header>
+  <main>
+    <div id="error" class="error"></div>
+    <section class="grid">
+      <div class="panel"><div class="muted">项目</div><div class="metric" id="projectCount">–</div></div>
+      <div class="panel"><div class="muted">活动执行</div><div class="metric" id="activeCount">–</div></div>
+      <div class="panel"><div class="muted">已注册 Agent</div><div class="metric" id="agentCount">–</div></div>
+    </section>
+    <section class="panel"><h2>提交执行</h2><div class="form-row"><select id="executionProject"></select><input id="revision" placeholder="Git commit / SVN revision"><input id="idempotency" placeholder="幂等键"><button class="primary" onclick="submitExecution()">提交</button></div></section>
+    <section class="panel wide"><h2>最近执行</h2><table><thead><tr><th>ID</th><th>项目</th><th>状态</th><th>结果</th><th>源码版本</th><th>创建时间</th><th></th></tr></thead><tbody id="executions"></tbody></table></section>
+    <section class="panel wide"><h2>Agent</h2><table><thead><tr><th>名称</th><th>标签</th><th>资源</th><th>最后心跳</th><th>维护</th></tr></thead><tbody id="agents"></tbody></table></section>
+    <section class="panel wide"><h2>项目与发布版本</h2><table><thead><tr><th>名称</th><th>框架</th><th>源码</th><th>负责人</th><th>并发</th><th>当前 Release</th></tr></thead><tbody id="projects"></tbody></table>
+      <details><summary>创建项目</summary><div class="form-row" style="margin-top:12px"><input id="pName" placeholder="项目名称"><input id="pRepo" placeholder="仓库 URL"><select id="pSource"><option>git</option><option>svn</option></select><input id="pFramework" placeholder="pytest / robot / jmeter"><input id="pOwner" placeholder="负责人"></div><p class="muted">项目配置 JSON（镜像必须固定 Digest，命令必须使用 argv 数组）</p><textarea id="pConfig">{
+  "image_digest": "python@sha256:REPLACE_WITH_REAL_DIGEST",
+  "recipe": [{"phase": "test", "command": ["pytest", "-q"]}],
+  "required_labels": {"os": "linux"},
+  "artifact_paths": ["junit.xml"]
+}</textarea><button class="primary" onclick="createProject()">创建并发布</button></details>
+    </section>
+    <p class="muted">高级配置、公共服务、镜像构建和审计请使用 <a href="/docs">OpenAPI 控制台</a>。</p>
+  </main>
+<script>
+const API='/api/v1'; const active=new Set(['PREPARING','ASSIGNED','RUNNING','FINALIZING','RECONCILING']);
+let projects=[];
+function headers(json=true){const h={};const key=localStorage.getItem('testforge-key');if(key)h.Authorization=`Bearer ${key}`;if(json)h['Content-Type']='application/json';h['X-Actor']='web-console';return h;}
+async function api(path,options={}){options.headers={...headers(options.body!==undefined),...(options.headers||{})};const r=await fetch(API+path,options);if(!r.ok)throw new Error(`${r.status} ${await r.text()}`);return r.status===204?null:r.json();}
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function saveKey(){localStorage.setItem('testforge-key',document.querySelector('#apiKey').value);refreshAll();}
+async function refreshAll(){document.querySelector('#error').textContent='';try{const [p,e,a]=await Promise.all([api('/projects'),api('/executions'),api('/agents')]);projects=p;projectCount.textContent=p.length;activeCount.textContent=e.filter(x=>active.has(x.status)).length;agentCount.textContent=a.length;executionProject.innerHTML=p.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');projectsTable(p);executionTable(e);agentTable(a);}catch(e){document.querySelector('#error').textContent=e.message;}}
+function projectsTable(rows){document.querySelector('#projects').innerHTML=rows.map(x=>`<tr><td>${esc(x.name)}</td><td>${esc(x.framework)}</td><td><code>${esc(x.source_type)} · ${esc(x.repository_url)}</code></td><td>${esc(x.owner)}</td><td>${x.concurrency_limit}</td><td><code>${esc(x.current_release_id||'未发布')}</code></td></tr>`).join('');}
+function executionTable(rows){document.querySelector('#executions').innerHTML=rows.slice(0,100).map(x=>`<tr><td><code title="${esc(x.id)}">${esc(x.id.slice(0,8))}</code></td><td>${esc((projects.find(p=>p.id===x.project_id)||{}).name||x.project_id.slice(0,8))}</td><td><span class="status">${esc(x.status)}</span></td><td>${esc(x.result_kind)}</td><td><code>${esc(x.source_revision.slice(0,12))}</code></td><td>${new Date(x.created_at).toLocaleString()}</td><td>${active.has(x.status)||x.status==='QUEUED'?`<button class="danger" onclick="cancelExecution('${esc(x.id)}')">取消</button>`:''}</td></tr>`).join('');}
+function agentTable(rows){document.querySelector('#agents').innerHTML=rows.map(x=>`<tr><td>${esc(x.name)}</td><td><code>${esc(JSON.stringify(x.labels))}</code></td><td>${x.cpu_millis}m / ${x.memory_mb}MB / ${x.max_concurrency}</td><td>${new Date(x.last_seen_at).toLocaleString()}</td><td><button onclick="maintenance('${esc(x.id)}',${!x.maintenance})">${x.maintenance?'退出维护':'进入维护'}</button></td></tr>`).join('');}
+async function submitExecution(){try{await api('/executions',{method:'POST',body:JSON.stringify({project_id:executionProject.value,source_revision:revision.value,idempotency_key:idempotency.value||crypto.randomUUID(),parameters:{}})});await refreshAll();}catch(e){error.textContent=e.message;}}
+async function cancelExecution(id){if(confirm('确认取消该执行？')){await api(`/executions/${id}/cancel`,{method:'POST'});refreshAll();}}
+async function maintenance(id,value){await api(`/agents/${id}/maintenance`,{method:'PATCH',body:JSON.stringify({maintenance:value})});refreshAll();}
+async function createProject(){try{const p=await api('/projects',{method:'POST',body:JSON.stringify({name:pName.value,repository_url:pRepo.value,source_type:pSource.value,framework:pFramework.value,owner:pOwner.value,concurrency_limit:1,draft_config:JSON.parse(pConfig.value)})});await api(`/projects/${p.id}/releases`,{method:'POST'});await refreshAll();}catch(e){error.textContent=e.message;}}
+document.querySelector('#apiKey').value=localStorage.getItem('testforge-key')||'';refreshAll();setInterval(refreshAll,15000);
+</script>
+</body>
+</html>

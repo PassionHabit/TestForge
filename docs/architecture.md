@@ -8,10 +8,12 @@ TestForge 由控制面 API、关系数据库和主动拉取任务的 Agent 组�
 flowchart LR
     USER["人工 / CI"] --> API["FastAPI 控制面"]
     API <--> DB[("PostgreSQL / SQLite")]
-    AGENT["Docker Agent"] -->|"注册、心跳、领取租约"| API
-    AGENT -->|"分段日志、产物清单、终态"| API
+    AGENT["Docker / Native Agent"] -->|"注册、心跳、领取租约"| API
+    AGENT -->|"分段日志、产物内容与清单、终态"| API
     AGENT --> ENGINE["Docker Engine"]
     ENGINE --> JOB["按 Digest 固定的测试容器"]
+    API --> OUTBOX["分析平台 / CI 回调 Outbox"]
+    API --> SVC["公共服务 / 外部资源许可"]
 ```
 
 控制面不向 Agent 重复下发“立即执行”命令。Agent 只能使用当前执行单的租约 token 和 generation 上报，旧租约过期后无法修改新尝试。
@@ -25,7 +27,7 @@ flowchart LR
 
 ## 故障语义
 
-任务失败分为 `TEST_FAILED` 和 `INFRA_FAILED`；取消为 `CANCELLED`；尚未评估为 `NOT_EVALUATED`。过期租约不会盲目重跑，执行单进入 `RECONCILING`，由运维对账容器标签后决定处置。
+任务失败分为 `TEST_FAILED` 和 `INFRA_FAILED`；取消为 `CANCELLED`；尚未评估为 `NOT_EVALUATED`。过期租约不会盲目重跑，执行单进入 `RECONCILING`。Agent 使用容器上的 execution/generation 标签接管存量运行；已开始任务不允许自动重跑。
 
 ## 安全默认值
 
@@ -33,8 +35,10 @@ flowchart LR
 - 配方命令使用 argv 数组，不通过 shell 解析。
 - 测试容器禁止提权，丢弃全部 capabilities，限制 CPU、内存和 PID。
 - Agent 只挂载本次源码工作目录，不挂载 Docker Socket 到测试容器。
-- 参数仅支持非敏感标量注入。生产环境的短期凭据应由后续 Secret Provider 接口注入。
+- 参数按发布版 JSON Schema 校验，日志在入库前脱敏。外部服务认证仅保存环境变量引用，不持久化密文。
+- Native 执行默认禁用，必须在 `executor_pool=native` 独立 Agent 上显式开启。
+- 控制面和 Agent 凭据分离，所有写操作记录 actor、request id、路径和结果。
 
-## 当前实现边界
+## 生产适配点
 
-本版本是 M0/M1 基线，尚未实现设计中的 SVN、Native 高风险资源池、对象存储上传、公共服务补偿、Secret Provider、身份授权、分析平台回调和完整的自动对账决策。这些属于 M2–M4，上线前必须根据现场基础设施补齐。
+设计文档未指定的企业基础设施通过稳定边界接入：公共服务/资源许可使用幂等 HTTP 契约；分析平台和 CI 使用 Outbox 回调；Dockerfile 由隔离构建服务领取 build 记录并回填扫描后 Digest。默认产物存储是带原子替换的本地参考实现；生产部署需将该存储边界配置到现场对象存储，并将 API Key 换成现有 IdP 签发的短期凭据。

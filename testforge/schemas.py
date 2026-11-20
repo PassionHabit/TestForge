@@ -17,6 +17,14 @@ class RecipeStep(BaseModel):
     continue_on_failure: bool = False
 
 
+class ServiceBinding(BaseModel):
+    service_release_id: str
+    binding_key: str = Field(min_length=1, max_length=200)
+    phase: Literal["before", "during", "after"]
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    failure_policy: Literal["abort", "continue"] = "abort"
+
+
 class ProjectConfig(BaseModel):
     image_digest: str
     recipe: list[RecipeStep]
@@ -25,6 +33,8 @@ class ProjectConfig(BaseModel):
     memory_mb: int = Field(default=1024, ge=128)
     artifact_paths: list[str] = Field(default_factory=list)
     parameter_schema: dict[str, Any] = Field(default_factory=dict)
+    services: list[ServiceBinding] = Field(default_factory=list)
+    execution_kind: Literal["docker", "native"] = "docker"
 
     @field_validator("image_digest")
     @classmethod
@@ -41,12 +51,18 @@ class ProjectConfig(BaseModel):
             raise ValueError("recipe must contain at least one test step")
         if phases != sorted(phases):
             raise ValueError("recipe phases must follow prepare -> test -> collect -> cleanup")
+        if (
+            self.execution_kind == "native"
+            and self.required_labels.get("executor_pool") != "native"
+        ):
+            raise ValueError("native execution requires executor_pool=native")
         return self
 
 
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     repository_url: str
+    source_type: Literal["git", "svn"] = "git"
     framework: str
     owner: str
     concurrency_limit: int = Field(default=1, ge=1, le=200)
@@ -63,6 +79,7 @@ class ProjectView(ORMModel):
     id: str
     name: str
     repository_url: str
+    source_type: str
     framework: str
     owner: str
     concurrency_limit: int
@@ -103,12 +120,92 @@ class ExecutorView(ORMModel):
     maintenance: bool
 
 
+class ImageBuildCreate(BaseModel):
+    repository_url: str
+    source_revision: str = Field(min_length=1, max_length=200)
+    dockerfile: str = Field(min_length=1, max_length=100_000)
+    requested_by: str
+
+
+class ImageBuildResult(BaseModel):
+    status: Literal["PUBLISHED", "FAILED"]
+    image_digest: str | None = None
+    scan_passed: bool
+    failure_reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_published_image(self):
+        if self.status == "PUBLISHED":
+            if not self.scan_passed:
+                raise ValueError("a published build must pass security scanning")
+            if not self.image_digest or "@sha256:" not in self.image_digest:
+                raise ValueError("a published build requires an immutable image digest")
+        return self
+
+
+class ImageBuildView(ORMModel):
+    id: str
+    repository_url: str
+    source_revision: str
+    dockerfile: str
+    requested_by: str
+    status: str
+    image_digest: str | None
+    scan_passed: bool | None
+    failure_reason: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ServiceConfig(BaseModel):
+    create_url: str
+    health_url: str | None = None
+    cleanup_url: str
+    status_url: str | None = None
+    auth_header_env: str | None = None
+    timeout_seconds: int = Field(default=30, ge=1, le=300)
+    retries: int = Field(default=2, ge=0, le=10)
+
+
+class ServiceCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    service_type: str = Field(min_length=2, max_length=80)
+    owner: str
+    draft_config: ServiceConfig
+
+
+class ServiceUpdate(BaseModel):
+    owner: str | None = None
+    draft_config: ServiceConfig | None = None
+
+
+class ServiceView(ORMModel):
+    id: str
+    name: str
+    service_type: str
+    owner: str
+    draft_config: dict[str, Any]
+    current_release_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ServiceReleaseView(ORMModel):
+    id: str
+    service_id: str
+    version: int
+    snapshot: dict[str, Any]
+    snapshot_hash: str
+    created_at: datetime
+
+
 class ExecutionCreate(BaseModel):
     project_id: str
     release_id: str | None = None
-    source_revision: str = Field(min_length=7, max_length=200)
+    source_revision: str = Field(min_length=1, max_length=200)
     parameters: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: str = Field(min_length=8, max_length=200)
+    callback_url: str | None = None
 
 
 class ExecutionView(ORMModel):
@@ -133,6 +230,7 @@ class ExecutionView(ORMModel):
     cleanup_complete: bool
     delivery_complete: bool
     failure_reason: str | None
+    callback_url: str | None
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
@@ -158,6 +256,25 @@ class AgentView(ORMModel):
     last_seen_at: datetime
 
 
+class AgentMaintenance(BaseModel):
+    maintenance: bool
+
+
+class ObservedRuntime(BaseModel):
+    execution_id: str
+    generation: int = Field(ge=1)
+    container_name: str
+
+
+class ReconcileRequest(BaseModel):
+    runtimes: list[ObservedRuntime] = Field(default_factory=list)
+
+
+class ReconcileResolution(BaseModel):
+    action: Literal["requeue_unstarted", "mark_failed", "mark_cancelled"]
+    reason: str = Field(min_length=3, max_length=1000)
+
+
 class LeaseWork(BaseModel):
     lease_id: str
     lease_token: str
@@ -169,6 +286,10 @@ class LeaseWork(BaseModel):
 class LeaseHeartbeat(BaseModel):
     lease_token: str
     generation: int
+
+
+class ServicePhaseRequest(LeaseHeartbeat):
+    phase: Literal["before", "during", "after"]
 
 
 class StateReport(LeaseHeartbeat):

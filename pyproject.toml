@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "testforge"
-version = "0.1.0"
+version = "0.2.0"
 description = "Reliable automation test execution control plane and agent"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,6 +12,7 @@ dependencies = [
   "alembic>=1.14,<2",
   "fastapi>=0.115,<1",
   "httpx>=0.27,<1",
+  "jsonschema>=4.23,<5",
   "pydantic-settings>=2.6,<3",
   "sqlalchemy>=2.0,<3",
   "uvicorn[standard]>=0.32,<1",
@@ -31,6 +32,9 @@ testforge-agent = "testforge.agent:run"
 
 [tool.setuptools.packages.find]
 include = ["testforge*"]
+
+[tool.setuptools.package-data]
+testforge = ["static/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

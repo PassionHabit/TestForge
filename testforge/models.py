@@ -60,6 +60,7 @@ class Project(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4str)
     name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     repository_url: Mapped[str] = mapped_column(String(1000))
+    source_type: Mapped[str] = mapped_column(String(20), default="git")
     framework: Mapped[str] = mapped_column(String(50))
     owner: Mapped[str] = mapped_column(String(200))
     concurrency_limit: Mapped[int] = mapped_column(Integer, default=1)
@@ -95,6 +96,65 @@ class Executor(Base):
     max_concurrency: Mapped[int] = mapped_column(Integer, default=1)
     maintenance: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ImageBuild(Base):
+    __tablename__ = "image_builds"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4str)
+    repository_url: Mapped[str] = mapped_column(String(1000))
+    source_revision: Mapped[str] = mapped_column(String(200))
+    dockerfile: Mapped[str] = mapped_column(Text)
+    requested_by: Mapped[str] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(30), default="QUEUED", index=True)
+    image_digest: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    scan_passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PublicService(Base):
+    __tablename__ = "public_services"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4str)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    service_type: Mapped[str] = mapped_column(String(80))
+    owner: Mapped[str] = mapped_column(String(200))
+    draft_config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    current_release_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ServiceRelease(Base):
+    __tablename__ = "service_releases"
+    __table_args__ = (UniqueConstraint("service_id", "version", name="uq_service_version"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4str)
+    service_id: Mapped[str] = mapped_column(ForeignKey("public_services.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)
+    snapshot_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ServiceInstance(Base):
+    __tablename__ = "service_instances"
+    __table_args__ = (
+        UniqueConstraint("execution_id", "binding_key", name="uq_execution_service_binding"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4str)
+    execution_id: Mapped[str] = mapped_column(ForeignKey("executions.id"), index=True)
+    service_release_id: Mapped[str] = mapped_column(ForeignKey("service_releases.id"))
+    binding_key: Mapped[str] = mapped_column(String(200))
+    external_instance_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="CREATING")
+    cleanup_status: Mapped[str] = mapped_column(String(30), default="PENDING")
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Agent(Base):
@@ -138,6 +198,7 @@ class Execution(Base):
     cleanup_complete: Mapped[bool] = mapped_column(Boolean, default=False)
     delivery_complete: Mapped[bool] = mapped_column(Boolean, default=False)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    callback_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -183,6 +244,19 @@ class ArtifactManifest(Base):
     sealed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ArtifactBlob(Base):
+    __tablename__ = "artifact_blobs"
+    __table_args__ = (UniqueConstraint("execution_id", "path", name="uq_artifact_path"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4str)
+    execution_id: Mapped[str] = mapped_column(ForeignKey("executions.id"), index=True)
+    path: Mapped[str] = mapped_column(String(1000))
+    size: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    storage_uri: Mapped[str] = mapped_column(String(1500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ExecutionEvent(Base):
     __tablename__ = "execution_events"
 
@@ -190,4 +264,31 @@ class ExecutionEvent(Base):
     execution_id: Mapped[str] = mapped_column(ForeignKey("executions.id"), index=True)
     event_type: Mapped[str] = mapped_column(String(80))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class DeliveryOutbox(Base):
+    __tablename__ = "delivery_outbox"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4str)
+    execution_id: Mapped[str] = mapped_column(ForeignKey("executions.id"), index=True)
+    destination_url: Mapped[str] = mapped_column(String(1000))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(30), default="PENDING", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4str)
+    actor: Mapped[str] = mapped_column(String(200))
+    method: Mapped[str] = mapped_column(String(10))
+    path: Mapped[str] = mapped_column(String(1000))
+    status_code: Mapped[int] = mapped_column(Integer)
+    request_id: Mapped[str] = mapped_column(String(100), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -17,6 +17,7 @@ ALLOWED_TRANSITIONS: dict[ExecutionStatus, set[ExecutionStatus]] = {
         ExecutionStatus.RECONCILING,
     },
     ExecutionStatus.RECONCILING: {
+        ExecutionStatus.QUEUED,
         ExecutionStatus.RUNNING,
         ExecutionStatus.FINALIZING,
         ExecutionStatus.FAILED,

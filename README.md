@@ -1,6 +1,6 @@
 # TestForge
 
-统一自动化测试执行平台。当前版本实现了设计文档中 M0（基础契约）和 M1（最小端到端闭环）的可运行基线。
+统一自动化测试执行平台。当前版本已建立设计文档 M0–M4 的可运行功能基线。
 
 ## 已实现
 
@@ -10,7 +10,12 @@
 - Agent 注册、心跳、资源/标签匹配、并发限制和带代次的租约领取。
 - 幂等提交、过期租约对账、取消、分段日志、原子产物清单封存。
 - Docker 执行 Agent：默认非特权、禁止 Docker Socket、独立工作目录、优雅取消后强制终止。
-- OpenAPI、健康检查、Docker Compose 本地环境与 pytest 契约测试。
+- 多节点资源总量预留、维护模式、断线对账和存量容器安全接管。
+- 公共服务版本化、健康检查、幂等创建与补偿清理；同一机制可接外部资源许可。
+- Git/SVN 源码，Docker 与独立高风险 Native 执行池，受控 Dockerfile 构建任务。
+- 产物原子上传、日志脱敏、分析平台 Outbox 回调与指数退避重试。
+- 控制面/Agent 分权 API Key、审计记录、Prometheus 指标、存活/就绪检查。
+- OpenAPI、Alembic 迁移、Docker Compose 本地环境与 pytest 契约测试。
 
 ## 快速开始
 
@@ -45,4 +50,4 @@ pytest
 ruff check .
 ```
 
-详细 API 示例和实现边界见 [docs/getting-started.md](docs/getting-started.md) 与 [docs/architecture.md](docs/architecture.md)。
+详细 API 示例、架构和生产验收见 [docs/getting-started.md](docs/getting-started.md)、[docs/architecture.md](docs/architecture.md) 与 [docs/operations.md](docs/operations.md)。
